@@ -99,7 +99,7 @@ def main():
 
     obj_file = 'Models_2/Radcar.obj'
     texture_file = 'Models_2/Rad car.png'
-    background_texture_file = 'background.jpg'
+    background_texture_file = 'background3.jpg'
 
     vertices, texture_coords, normals, faces = load_obj(obj_file)
     texture_id = load_texture(texture_file)
@@ -161,7 +161,7 @@ def main():
         draw_text_box(
             "Текст перед камерою",
             font,
-            (0, 0, 0, 20),  # Прозорий має бути
+            (100, 100, 100, 20),  # Прозорий має бути
             (255, 255, 0),
             (WEIGHT / 2 - WEIGHT / 7, HEIGHT - 90),
             (WEIGHT / 3, HEIGHT / 7)
@@ -170,7 +170,7 @@ def main():
         draw_rotating_logo(
             "Nazar",
             font,
-            (0, 0, 0, 20), 
+            (100, 100, 100, 20), 
             (255, 255, 255),
             (50, HEIGHT - 150),
             rotation_angle
