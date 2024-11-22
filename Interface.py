@@ -3,12 +3,20 @@ from PyQt5.QtOpenGL import QGLWidget
 import OpenGL.GL as gl
 import sys
 from pywavefront import Wavefront
+from PyQt5.QtOpenGL import QGLWidget
+from PyQt5 import QtCore
+import OpenGL.GL as gl
+import OpenGL.GLUT as glut
+from pywavefront import Wavefront
+from PIL import Image
+import os
 
 
 class OpenGLWidget(QGLWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.model = None
+        self.texture_id = None  # Ідентифікатор текстури
         self.scale_factor = 1.0
         self.scale_min = 0.1
         self.scale_max = 10.0
@@ -22,6 +30,7 @@ class OpenGLWidget(QGLWidget):
         gl.glEnable(gl.GL_LIGHTING)
         gl.glEnable(gl.GL_LIGHT0)
         gl.glEnable(gl.GL_NORMALIZE)
+        gl.glEnable(gl.GL_TEXTURE_2D)  # Увімкнення текстур
 
     def resizeGL(self, w, h):
         gl.glViewport(0, 0, w, h)
@@ -31,33 +40,95 @@ class OpenGLWidget(QGLWidget):
         gl.glOrtho(-aspect_ratio, aspect_ratio, -1, 1, -10, 10)
         gl.glMatrixMode(gl.GL_MODELVIEW)
 
-    def paintGL(self):
+    def paintGL(self) -> None:
+        """
+        Відповідає за рендеринг сцени OpenGL.
+        """
+
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         gl.glLoadIdentity()
-
-        # Обертання моделі
         gl.glRotatef(self.rotation_x, 1.0, 0.0, 0.0)
         gl.glRotatef(self.rotation_y, 0.0, 1.0, 0.0)
-
-        # Масштабування моделі
         gl.glScalef(self.scale_factor, self.scale_factor, self.scale_factor)
 
-        # Відображення моделі
-        if self.model:
+        if self.model:  # type: Optional[Scene]
             for name, mesh in self.model.meshes.items():
-                gl.glBegin(gl.GL_TRIANGLES)
-                for face in mesh.faces:
-                    for vertex_index in face:
-                        vertex = self.model.vertices[vertex_index]
-                        gl.glVertex3f(*vertex)
-                gl.glEnd()
+                for material in mesh.materials:
+                    # Активуємо текстуру, якщо вона є
+                    if material.texture and material.texture.image_name in self.texture_map:
+                        #TODO:текстури чомусь null
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, self.texture_map[material.texture.image_name])
+                    else:
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+
+                    gl.glBegin(gl.GL_TRIANGLES)
+                    for face in mesh.faces:  # face — це список індексів вершин
+                        for vertex_index in face:
+                            # Отримуємо вершину з self.model.vertices
+                            vertex = self.model.vertices[vertex_index]
+                            
+                            # Нормалі (перевіряємо, чи є вони у вершині)
+                            if len(vertex) >= 6:  # x, y, z, nx, ny, nz
+                                gl.glNormal3f(vertex[3], vertex[4], vertex[5])  # Нормалі
+                            # Текстурні координати (перевіряємо, чи є вони у вершині)
+                            if len(vertex) >= 8:  # x, y, z, nx, ny, nz, u, v
+                                gl.glTexCoord2f(vertex[6], vertex[7])  # Текстурні координати
+                            # Вершина
+                            gl.glVertex3f(vertex[0], vertex[1], vertex[2])
+                    gl.glEnd()
+
 
     def load_model(self, file_path):
         try:
+            print(f"Завантаження моделі")
+            # Завантаження моделі
             self.model = Wavefront(file_path, collect_faces=True, create_materials=True)
+            print(f"Завантаження текстур")
+            # Завантаження текстур
+            self.texture_map = self.load_textures(self.model)
+            print(f"Текстура успішно завантажена")
             self.update()
         except Exception as e:
             print(f"Помилка завантаження моделі: {e}")
+
+    def load_textures(self, model):
+        """
+        Завантаження текстур для всіх матеріалів у моделі.
+        """
+        texture_map = {}
+        model_directory = os.path.dirname(model.file_name)  # Директорія моделі
+        for name, material in model.materials.items():
+            if material.texture and material.texture.image_name:
+                # Отримання повного шляху до текстури
+                texture_path = os.path.join(model_directory, material.texture.image_name)
+                if os.path.exists(texture_path):
+                    print(f"Шлях існує {texture_path}")
+                    texture_map[material.texture.image_name] = self.create_texture(texture_path)
+                else:
+                    print(f"Текстура не знайдена: {texture_path}")
+        return texture_map
+
+
+    def create_texture(self, texture_path):
+        """
+        Створення текстури з файлу.
+        """
+        try:
+            image = Image.open(texture_path)
+            image = image.transpose(Image.FLIP_TOP_BOTTOM)
+            image_data = image.convert("RGBA").tobytes()
+            width, height = image.size
+
+            texture_id = gl.glGenTextures(1)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, image_data)
+            gl.glTexParameterf(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+            gl.glTexParameterf(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            print(f"Текстура успішно завантажена: {texture_id}")
+            return texture_id
+        except Exception as e:
+            print(f"Помилка завантаження текстури: {e}")
+            return None
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y() / 120
@@ -81,6 +152,7 @@ class OpenGLWidget(QGLWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             self.last_mouse_position = None
+
 
 
 
