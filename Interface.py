@@ -228,7 +228,7 @@ class Ui_MainWindow(object):
 
         # OpenGL віджет
         self.WidgetFor3d = QtWidgets.QWidget(self.centralwidget)
-        self.WidgetFor3d.setGeometry(QtCore.QRect(10, 10, 431, 541))
+        self.WidgetFor3d.setGeometry(QtCore.QRect(10, 10, 431, 541)) 
         self.WidgetFor3d.setObjectName("WidgetFor3d")
             
         # Графічний віджет
@@ -306,7 +306,8 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Налаштовуємо початковий текст
         self.ui.LabelForText.setText("ПРИВІТ!\n Тута будуть показуватися правила дорожнього руху для початківців)")
-        self.rules = getRules()
+        self.rules = []
+        self.load_rules_async()
 
         # Підключаємо кнопки
         self.ui.ButtonForTextChange.clicked.connect(self.change_text)
@@ -365,6 +366,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rotation_angle += 5
         self.rotating_text.setRotation(self.rotation_angle)
 
+    def load_rules_async(self):
+            """Завантаження правил у фоновому потоці."""
+            def fetch_rules():
+                rules = getRules()
+                self.rules = rules or ["Правила відсутні або не завантажилися."]
+                self.ui.LabelForText.setText(self.rules[0])  # Показуємо перше правило, коли вони завантажаться.
+            
+            threading.Thread(target=fetch_rules, daemon=True).start()
 
 if __name__ == "__main__":
     AUTHORIZED_HOSTNAME = "DESKTOP-PLP53PH"
