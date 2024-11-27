@@ -4,11 +4,10 @@ import threading
 import winreg
 import sys
 import os
+import vtk
+from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtOpenGL import QGLWidget
 from PyQt5.QtWidgets import QGraphicsTextItem
-import OpenGL.GL as gl
-from pywavefront import Wavefront
 
 from getRules import getRules
 from music import play_random_music
@@ -52,171 +51,60 @@ def load_from_registry(key):
         print(f"Помилка завантаження з реєстру: {e}")
         return None
 
-def load_3d_model(self):
-    # Відкриття діалогу для вибору файлу
-    file_dialog = QtWidgets.QFileDialog(self)
-    file_path, _ = file_dialog.getOpenFileName(
-        self, "Виберіть .obj файл", "", "3D Model Files (*.obj)"
-    )
-    if file_path:
-        self.opengl_widget.load_model(file_path)
-        save_to_registry("last_model_path", file_path)  # Зберігаємо шлях у реєстр
+def load_model_and_texture_from_registry():
+    model_path = load_from_registry("last_model_path")
+    texture_path = load_from_registry("last_texture_path")
+    return model_path, texture_path
 
-
-class OpenGLWidget(QGLWidget):
+class VTKWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
+        
         super().__init__(parent)
-        self.model = None
-        self.texture_id = None  # Ідентифікатор текстури
-        self.scale_factor = 1.0
-        self.scale_min = 0.1
-        self.scale_max = 10.0
-        self.rotation_x = 0
-        self.rotation_y = 0
-        self.last_mouse_position = None
-        self.current_model_path = None
+        self.vtkWidget = QVTKRenderWindowInteractor(self)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.vtkWidget)
+        self.setLayout(layout)
 
-    def initializeGL(self):
-        gl.glClearColor(0.0, 1.0, 0.0, 1.0)  # Зелений фон
-        gl.glEnable(gl.GL_DEPTH_TEST)
-        gl.glEnable(gl.GL_LIGHTING)
-        gl.glEnable(gl.GL_LIGHT0)
-        gl.glEnable(gl.GL_NORMALIZE)
-        gl.glEnable(gl.GL_TEXTURE_2D)  # Увімкнення текстур
+        self.renderer = vtk.vtkRenderer()
+        self.vtkWidget.GetRenderWindow().AddRenderer(self.renderer)
+        self.interactor = self.vtkWidget.GetRenderWindow().GetInteractor()
 
-    def resizeGL(self, w, h):
-        gl.glViewport(0, 0, w, h)
-        gl.glMatrixMode(gl.GL_PROJECTION)
-        gl.glLoadIdentity()
-        aspect_ratio = w / h if h > 0 else 1
-        gl.glOrtho(-aspect_ratio, aspect_ratio, -1, 1, -10, 10)
-        gl.glMatrixMode(gl.GL_MODELVIEW)
+    def load_model_with_texture(self, model_path, texture_path=None):
+        # Перевірка шляху до моделі
+        if not model_path:
+            print("Шлях до моделі не передано.")
+            return
+        # Очищення сцени перед додаванням нової моделі
+        self.renderer.RemoveAllViewProps()
 
-    def load_model(self, file_path):
-        """
-        Завантаження моделі з автоматичним пошуком текстури.
-        """
-        try:
-            print(f"Завантаження моделі: {file_path}")
-            # Завантаження моделі
-            self.model = Wavefront(file_path, collect_faces=True, create_materials=True)
-            self.current_model_path = file_path
-            # Автоматичний пошук текстури
-            obj_dir = os.path.dirname(file_path)
-            obj_name = os.path.splitext(os.path.basename(file_path))[
-                0
-            ]  # Ім'я без розширення
-            texture_path = os.path.join(
-                obj_dir, f"{obj_name}.png"
-            )  # Очікувана текстура
+        # Читання моделі
+        reader = vtk.vtkOBJReader()
+        reader.SetFileName(model_path)
 
-            # Завантаження текстури, якщо вона існує
-            if os.path.exists(texture_path):
-                self.texture_map = {obj_name: self.bind_texture(texture_path)}
-                print(f"Текстура завантажена: {texture_path}")
-            else:
-                print(
-                    f"Текстура {texture_path} не знайдена. Використовується стандартний матеріал."
-                )
-                self.texture_map = {}  # Порожній мап текстур
+        # Відображення моделі
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputConnection(reader.GetOutputPort())
 
-            self.update()
-        except Exception as e:
-            print(f"Помилка завантаження моделі: {e}")
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
 
-    def paintGL(self):
-        """
-        Рендеринг моделі з автоматичною прив'язкою текстури.
-        """
-        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-        gl.glLoadIdentity()
+        # Якщо шлях до текстури передано, додаємо текстуру
+        if texture_path and os.path.exists(texture_path):
+            texture_reader = vtk.vtkJPEGReader() if texture_path.endswith(".jpg") else vtk.vtkPNGReader()
+            texture_reader.SetFileName(texture_path)
 
-        # Обертання моделі
-        gl.glRotatef(self.rotation_x, 1.0, 0.0, 0.0)
-        gl.glRotatef(self.rotation_y, 0.0, 1.0, 0.0)
+            texture = vtk.vtkTexture()
+            texture.SetInputConnection(texture_reader.GetOutputPort())
+            texture.InterpolateOn()  # Гладке накладання текстури
 
-        # Масштабування
-        gl.glScalef(self.scale_factor, self.scale_factor, self.scale_factor)
+            actor.SetTexture(texture)
+        else:
+            print("Текстуру не передано або файл текстури не існує. Модель буде відображена без текстури.")
 
-        # Рендеринг моделі
-        if self.model:
-            for mesh_name, mesh in self.model.meshes.items():
-                # Прив'язка текстури (якщо вона є)
-                obj_name = os.path.splitext(os.path.basename(self.model.file_name))[0]
-                texture_id = self.texture_map.get(obj_name, None)
-                if texture_id:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
-                else:
-                    gl.glBindTexture(
-                        gl.GL_TEXTURE_2D, 0
-                    )  # Відключити текстуру, якщо вона відсутня
-
-                # Рендеринг мешів
-                gl.glBegin(gl.GL_TRIANGLES)
-                for face in mesh.faces:
-                    for vertex_index in face:
-                        vertex = self.model.vertices[vertex_index]
-                        if len(vertex) >= 6:
-                            gl.glNormal3f(vertex[3], vertex[4], vertex[5])  # Нормалі
-                        if len(vertex) >= 8:
-                            gl.glTexCoord2f(
-                                vertex[6], vertex[7]
-                            )  # Текстурні координати
-                        gl.glVertex3f(vertex[0], vertex[1], vertex[2])  # Вершини
-                gl.glEnd()
-
-    def bind_texture(self, texture_path):
-        from PIL import Image
-
-        try:
-            image = Image.open(texture_path)
-            image = image.transpose(Image.FLIP_TOP_BOTTOM)
-            img_data = image.convert("RGBA").tobytes()
-            width, height = image.size
-
-            texture_id = gl.glGenTextures(1)
-            gl.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
-            gl.glTexImage2D(
-                gl.GL_TEXTURE_2D,
-                0,
-                gl.GL_RGBA,
-                width,
-                height,
-                0,
-                gl.GL_RGBA,
-                gl.GL_UNSIGNED_BYTE,
-                img_data,
-            )
-            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-            return texture_id
-        except Exception as e:
-            print(f"Помилка завантаження текстури: {e}")
-            return None
-
-    def wheelEvent(self, event):
-        delta = event.angleDelta().y() / 120
-        self.scale_factor += delta * 0.1
-        self.scale_factor = max(self.scale_min, min(self.scale_factor, self.scale_max))
-        self.update()
-
-    def mousePressEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.last_mouse_position = event.pos()
-
-    def mouseMoveEvent(self, event):
-        if self.last_mouse_position:
-            dx = event.x() - self.last_mouse_position.x()
-            dy = event.y() - self.last_mouse_position.y()
-            self.rotation_x += dy * 0.5
-            self.rotation_y += dx * 0.5
-            self.last_mouse_position = event.pos()
-            self.update()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == QtCore.Qt.LeftButton:
-            self.last_mouse_position = None
-
+        # Додавання до сцени
+        self.renderer.AddActor(actor)
+        self.renderer.SetBackground(0.2, 0.2, 0.2)  # Темно-синій фон
+        self.vtkWidget.GetRenderWindow().Render()
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -274,20 +162,35 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
-
-        # Ініціалізація OpenGLWidget
-        self.opengl_widget = OpenGLWidget(self.ui.WidgetFor3d)
+        self.model_path = None
+        self.texture_path = None
+        self.model_texture_dict = {
+            "Models_2/Radcar.obj": "Models_2/Radcar.png",
+            "Models_2/Sign.obj": "Models_2/Sign.jpg",
+            "Models_2/Sign02.obj": "Models_2/Sign02.jpg",  # Модель без текстури
+        }
+        self.current_model_index = 0  # Індекс поточної моделі
+        
+        # Ініціалізація VTKWidget
+        self.vtk_widget = VTKWidget(self.ui.WidgetFor3d)
         layout = QtWidgets.QVBoxLayout(self.ui.WidgetFor3d)
-        layout.addWidget(self.opengl_widget)
+        layout.addWidget(self.vtk_widget)
 
-        last_model_path = load_from_registry("last_model_path")
-        if last_model_path and os.path.exists(last_model_path):
-            self.opengl_widget.load_model(last_model_path)
-        elif last_model_path:
-            print(f"Файл '{last_model_path}' не знайдено.")
+        # Підключення кнопки для завантаження моделі
+        self.ui.ButtonToStopMusic.clicked.connect(self.load_vtk_model)
+
+        self.model_timer = QtCore.QTimer(self)
+        self.model_timer.timeout.connect(self.load_next_model)
+        self.model_timer.start(10000)  # Інтервал 10 секунд
+        
+        # Автоматичне завантаження останньої моделі
+        self.load_last_model()
+        
+        # Завантаження моделі та текстури
+        self.vtk_widget.load_model_with_texture(self.model_path, self.texture_path)
         
         self.setStyleSheet(
-            "MainWindow { background-image: url('background5.jpg'); background-repeat: no-repeat; background-position: center; }"
+            "MainWindow { background-image: url('background6.jpg'); background-repeat: no-repeat; background-position: center; }"
         )
         
         # Форматування текстового віджета
@@ -298,7 +201,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 10px;  /* Внутрішні відступи */
                 color: white;  /* Колір тексту */
                 font-size: 20px;  /* Розмір тексту */
-                background-color: rgba(0, 0, 0, 0.3);  /* Напівпрозорий фон */
+                background-color: rgba(0, 0, 0, 0.6);  /* Напівпрозорий фон */
                 border-radius: 10px;  /* Закруглені кути */
             }
             """
@@ -311,7 +214,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Підключаємо кнопки
         self.ui.ButtonForTextChange.clicked.connect(self.change_text)
-        self.ui.ButtonToStopMusic.clicked.connect(self.load_3d_model)
         # Налаштовуємо анімацію тексту
         self.setup_rotating_text()
         
@@ -319,10 +221,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self.text_timer = QtCore.QTimer(self)
         self.text_timer.timeout.connect(self.change_text)  # Виклик зміни тексту
         self.text_timer.start(10000)  # Інтервал 10 секунд (10000 мс)
+    
+    def load_next_model(self):
+        """Завантажує наступну модель із словника."""
+        if not self.model_texture_dict:
+            print("Словник моделей порожній.")
+            return
+
+        # Отримуємо список ключів (шляхів до моделей)
+        model_paths = list(self.model_texture_dict.keys())
+
+        # Отримуємо поточний шлях до моделі та текстури
+        self.model_path = model_paths[self.current_model_index]
+        self.texture_path = self.model_texture_dict[self.model_path]
+
+        # Завантажуємо модель з текстурою (або без текстури)
+        self.vtk_widget.load_model_with_texture(self.model_path, self.texture_path)
+
+        # Переходимо до наступного індексу
+        self.current_model_index = (self.current_model_index + 1) % len(model_paths)
         
     def closeEvent(self, event):
-        if self.opengl_widget.current_model_path:
-            save_to_registry("last_model_path", self.opengl_widget.current_model_path)
+        """
+        Зберігає шлях до останньої завантаженої моделі та текстури перед закриттям програми.
+        """
+        if self.model_path:
+            save_to_registry("last_model_path", self.model_path)
+        if self.texture_path:
+            save_to_registry("last_texture_path", self.texture_path)
+        print("Шляхи до моделі та текстури успішно збережено перед закриттям.")
         event.accept()
         
     def change_text(self):
@@ -330,15 +257,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.rules:
             new_text = random.choice(self.rules)
             self.ui.LabelForText.setText(new_text)
-
-    def load_3d_model(self):
-        # Відкриття діалогу для вибору файлу
-        file_dialog = QtWidgets.QFileDialog(self)
-        file_path, _ = file_dialog.getOpenFileName(
-            self, "Виберіть .obj файл", "", "3D Model Files (*.obj)"
-        )
-        if file_path:
-            self.opengl_widget.load_model(file_path)
 
     def setup_rotating_text(self):
         # Створення сцени для графічного виду
@@ -366,6 +284,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rotation_angle += 5
         self.rotating_text.setRotation(self.rotation_angle)
 
+    def load_vtk_model(self):
+        self.model_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Виберіть .obj файл", "", "OBJ Files (*.obj)"
+        )
+        if not self.model_path:
+            print("Шлях до моделі не вибрано.")
+            return
+
+        # Діалог для вибору текстури (необов’язковий)
+        self.texture_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Виберіть текстуру (опціонально)", "", "Image Files (*.jpg *.png)"
+        )
+
+        # Завантаження моделі з або без текстури
+        self.vtk_widget.load_model_with_texture(self.model_path, self.texture_path if self.texture_path else None)
+    
+    def load_last_model(self):
+        self.model_path, self.texture_path = load_model_and_texture_from_registry()
+        if not self.model_path or not os.path.exists(self.model_path):
+            print("Шлях до моделі не знайдено або файл відсутній.")
+            return
+        if not self.texture_path or not os.path.exists(self.texture_path):
+            print("Шлях до текстури не знайдено або файл відсутній.")
+            return
+
+        self.vtk_widget.load_model_with_texture(self.model_path, self.texture_path)
+
+    
     def load_rules_async(self):
             """Завантаження правил у фоновому потоці."""
             def fetch_rules():
